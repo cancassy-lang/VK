@@ -1,0 +1,10 @@
+**General commands**
+/start \- sets up the bot
+
+**Admin commands**
+/addadmin \<id\> \- adds an admin to the bot
+/addworker \<id\> \- adds a worker to the bot
+
+**Owner commands**
+/removeadmin \<id\> \-  removes an admin from this bot
+/removeworker \<id\> \- removes a worker from this bot
