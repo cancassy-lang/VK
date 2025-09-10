@@ -1,7 +1,6 @@
 {
   "dependencies": {
-    "http": "^0.0.1-security",
-    "request": "^2.88.2",
+    "request": "^2.88.2", // Keep but note: deprecated; use node-fetch if issues
     "telegraf": "^4.16.3",
     "telegram-keyboard": "^2.3.5"
   }
