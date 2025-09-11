@@ -75,37 +75,19 @@ const UserPrivilege = {
     Unprivileged: 0
 }
 
-let userVerificationInfo = []; // Added: Missing from original
+let userVerificationInfo = [];
 
-/**
- * Gets user privilege
- * @param {number} userId
- * 
- * @returns {number} User's privilege 
- */
 function getPrivilege(userId) {
     if (db.Admins.includes(userId)) return UserPrivilege.Admin;
     if (db.Workers.includes(userId)) return UserPrivilege.Worker;
     return UserPrivilege.Unprivileged;
 }
 
-/**
- * Has privilege check
- * @param {string} userId
- * @param {number} requiredPrivilege
- * 
- * @returns {boolean} `true` if the user has the required privilege or more
- */
 function hasPrivilege(userId, requiredPrivilege) {
     const userPrivilege = getPrivilege(userId);
     return userPrivilege >= requiredPrivilege;
 }
 
-/**
- * Completes a user verification
- * 
- * @param {string} verificationKey
- */
 async function completeUserVerification(verificationKey) {
     const entry = userVerificationInfo.filter((d) => d.verificationKey == verificationKey)[0];
     if (entry == undefined) return;
@@ -115,7 +97,7 @@ async function completeUserVerification(verificationKey) {
         await entry.context.sendPhoto(VERIFIED_IMAGE_URL, {
             caption:
                 "Verified, you can join the group using this temporary link:\n\n" +
-                `https://your-test-invite-link-here\n\n` + // CHANGE TO YOUR TEST INVITE
+                `https://t.me/+yourtestgroupinvite\n\n` + // CHANGE TO YOUR TEST INVITE
                 "This link is a one time use and will expire"
         });
     } catch (err) {
@@ -123,12 +105,6 @@ async function completeUserVerification(verificationKey) {
     }
 }
 
-/**
- * Deletes an entry from a pending list and looks for duplicates
- * 
- * @param {string} userId 
- * @param {string} botId 
- */
 function deleteFromPendingList(userId, botId) {
     const entries = userVerificationInfo.filter((d) => d.userId == userId && d.botId == botId);
     for (let i = 0; i < entries.length; i++) {
@@ -138,16 +114,13 @@ function deleteFromPendingList(userId, botId) {
     }
 }
 
-/**
- * Inits worker bot
- * 
- * @param {string} token 
- * @param {string} name 
- */
 async function initFakeBot(token, name, username) {
     try {
         const b = new FakeBot(token, name, username);
-        if (!db.Bots.map((d) => (d.name == b.name && d.token == b.token && b.username == d.username)).includes(true)) db.Bots.push(b);
+        if (!db.Bots.some((d) => d.name === b.name && d.token === b.token && b.username === d.username)) {
+            db.Bots.push(b);
+            fs.writeFileSync("db.json", JSON.stringify(db, null, 4)); // Save new bot to db
+        }
         const worker = new Worker(path.resolve(__dirname, "./bot.js"), {
             workerData: {
                 token,
@@ -176,7 +149,7 @@ async function initFakeBot(token, name, username) {
         });
 
         botWorkers.push(worker);
-        // initFakebotCallback(b); // Original comment
+        console.log(`Fake bot '${name}' initialized`);
     } catch (ex) {
         console.error("Failed to initialize fake bot:", ex);
     }
@@ -213,47 +186,43 @@ async function initBot() {
 
         bot = new Telegraf(BOT_TOKEN);
 
-        // Fix: Error handling and 409 retry - now INSIDE initBot after bot creation
         bot.catch((err, ctx) => {
             console.error('Main bot error:', err);
             if (err.response && err.response.error_code === 409) {
-                console.log('409 Conflict detected, retrying launch in 10s...');
-                setTimeout(() => {
-                    bot.launch();
-                }, 10000);
+                console.log('409 Conflict caught, retrying...');
             }
         });
 
-        // In initBot(), replace the setTimeout block with:
-setTimeout(async () => {
-    let retryCount = 0;
-    const maxRetries = 3;
-    const baseDelay = 30000; // 30s initial
+        // Enhanced retry for 409
+        setTimeout(async () => {
+            let retryCount = 0;
+            const maxRetries = 3;
+            const baseDelay = 30000;
 
-    const launchWithRetry = async () => {
-        try {
-            await bot.launch();
-            console.log('Main bot launched successfully');
-            return;
-        } catch (err) {
-            if (err.response && err.response.error_code === 409) {
-                retryCount++;
-                if (retryCount >= maxRetries) {
-                    console.error('Max retries reached for 409 conflict');
+            const launchWithRetry = async () => {
+                try {
+                    await bot.launch();
+                    console.log('Main bot launched successfully');
                     return;
+                } catch (err) {
+                    if (err.response && err.response.error_code === 409) {
+                        retryCount++;
+                        if (retryCount >= maxRetries) {
+                            console.error('Max retries reached for 409 conflict');
+                            return;
+                        }
+                        const delay = baseDelay * Math.pow(2, retryCount - 1);
+                        console.log(`409 Conflict (attempt ${retryCount}/${maxRetries}), retrying in ${delay/1000}s...`);
+                        setTimeout(launchWithRetry, delay);
+                    } else {
+                        console.error('Non-409 launch error:', err);
+                        throw err;
+                    }
                 }
-                const delay = baseDelay * Math.pow(2, retryCount - 1); // Exponential: 30s, 60s, 120s
-                console.log(`409 Conflict (attempt ${retryCount}), retrying in ${delay/1000}s...`);
-                setTimeout(launchWithRetry, delay);
-            } else {
-                console.error('Non-409 launch error:', err);
-                throw err;
-            }
-        }
-    };
+            };
 
-    await launchWithRetry();
-}, 30000); // 30s initial delay
+            await launchWithRetry();
+        }, 30000);
 
         bot.command("start", async (ctx) => {
             try {
@@ -277,11 +246,16 @@ setTimeout(async () => {
                 if (ctx.myChatMember.new_chat_member.status != "administrator") return;
                 if (ctx.myChatMember.chat.type != 'channel') return;
 
+                if (db.Bots.length === 0) {
+                    await bot.telegram.sendMessage(ctx.from.id, "No fake bots available. Please add a bot using /addbot <token> <name> <username> first.");
+                    return;
+                }
+
                 const keyboard = Keyboard.make([
                     db.Bots.map((b) => ({ text: b.name, callback_data: `bot_${b.username}` }))
                 ], {
                     columns: 3
-                }).reply();
+                }).inline();
 
                 pendingSetups.push({ owner: ctx.from.id, channel: ctx.myChatMember.chat.id.toString(), channelName: ctx.myChatMember.chat.title, step: 0, bot: undefined, mode: 0 });
                 await bot.telegram.sendMessage(ctx.from.id, "Please choose the bot you'd like to use.", keyboard);
@@ -292,57 +266,86 @@ setTimeout(async () => {
 
         /* Administrator commands */
         bot.command("addbot", async (ctx) => {
-            if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-            const args = ctx.match.split(' ');
-            if (args.length < 3) return ctx.reply(`Bad usage!\nUsage: /addbot <token> <name> <bot username>`);
-            const token = args[0], name = args[1], username = args[2];
-            await initFakeBot(token, name, username);
-            return ctx.reply(`Bot '${name}' added.`);
+            try {
+                if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
+                const args = ctx.args; // Fix: Use ctx.args instead of ctx.match
+                if (args.length < 3) return ctx.reply(`Bad usage!\nUsage: /addbot <token> <name> <username>`);
+                const [token, name, username] = args;
+                await initFakeBot(token, name, username);
+                return ctx.reply(`Bot '${name}' added.`);
+            } catch (err) {
+                console.error("Addbot command error:", err);
+                return ctx.reply("Error adding bot. Check logs or try again.");
+            }
         });
 
         bot.command("addworker", async (ctx) => {
-            if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-            const args = ctx.match.split(' ');
-            if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addworker <id>`);
-            const worker = parseInt(args[0]);
-            if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
-            if (db.Workers.includes(worker)) return await ctx.reply(`The worker is already registered`);
-            db.Workers.push(worker);
-            return await ctx.reply(`Worker added.`);
+            try {
+                if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
+                const args = ctx.args; // Fix: Use ctx.args
+                if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addworker <id>`);
+                const worker = parseInt(args[0]);
+                if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
+                if (db.Workers.includes(worker)) return await ctx.reply(`The worker is already registered`);
+                db.Workers.push(worker);
+                fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
+                return await ctx.reply(`Worker added.`);
+            } catch (err) {
+                console.error("Addworker command error:", err);
+                return ctx.reply("Error adding worker.");
+            }
         });
 
         /* Owner commands */
         bot.command("removeworker", async (ctx) => {
-            if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-            const args = ctx.match.split(' ');
-            if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeworker <id>`);
-            const worker = parseInt(args[0]);
-            if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
-            if (!db.Workers.includes(worker)) return await ctx.reply(`The user is not a worker.`);
-            db.Workers.splice(db.Workers.indexOf(worker), 1);
-            return await ctx.reply(`Worker removed.`);
+            try {
+                if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
+                const args = ctx.args; // Fix: Use ctx.args
+                if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeworker <id>`);
+                const worker = parseInt(args[0]);
+                if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
+                if (!db.Workers.includes(worker)) return await ctx.reply(`The user is not a worker.`);
+                db.Workers.splice(db.Workers.indexOf(worker), 1);
+                fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
+                return await ctx.reply(`Worker removed.`);
+            } catch (err) {
+                console.error("Removeworker command error:", err);
+                return ctx.reply("Error removing worker.");
+            }
         });
 
         bot.command("addadmin", async (ctx) => {
-            if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-            const args = ctx.match.split(' ');
-            if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addadmin <id>`);
-            const admin = parseInt(args[0]);
-            if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
-            if (db.Admins.includes(admin)) return await ctx.reply(`The user is already an admin`);
-            db.Admins.push(admin);
-            return await ctx.reply(`Admin added.`);
+            try {
+                if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
+                const args = ctx.args; // Fix: Use ctx.args
+                if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addadmin <id>`);
+                const admin = parseInt(args[0]);
+                if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
+                if (db.Admins.includes(admin)) return await ctx.reply(`The user is already an admin`);
+                db.Admins.push(admin);
+                fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
+                return await ctx.reply(`Admin added.`);
+            } catch (err) {
+                console.error("Addadmin command error:", err);
+                return ctx.reply("Error adding admin.");
+            }
         });
 
         bot.command("removeadmin", async (ctx) => {
-            if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-            const args = ctx.match.split(' ');
-            if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeadmin <id>`);
-            const admin = parseInt(args[0]);
-            if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
-            if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an admin`);
-            db.Admins.splice(db.Admins.indexOf(admin), 1);
-            return await ctx.reply(`Admin removed.`);
+            try {
+                if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
+                const args = ctx.args; // Fix: Use ctx.args
+                if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeadmin <id>`);
+                const admin = parseInt(args[0]);
+                if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
+                if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an admin`);
+                db.Admins.splice(db.Admins.indexOf(admin), 1);
+                fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
+                return await ctx.reply(`Admin removed.`);
+            } catch (err) {
+                console.error("Removeadmin command error:", err);
+                return ctx.reply("Error removing admin.");
+            }
         });
 
         bot.on(message('text'), async (ctx) => {
@@ -362,7 +365,6 @@ setTimeout(async () => {
             }
         });
 
-        // Process signals for graceful stop
         process.once('SIGINT', () => {
             console.log('SIGINT received, stopping bot...');
             bot.stop('SIGINT');
@@ -372,9 +374,7 @@ setTimeout(async () => {
             bot.stop('SIGTERM');
         });
 
-        // Init HTTP worker for ports
         initWorker();
-
     } catch (error) {
         console.error('Failed to initialize bot:', error);
     }
@@ -383,7 +383,7 @@ setTimeout(async () => {
 process.on("uncaughtException", console.log);
 process.on("unhandledRejection", console.log);
 
-async function saveDatabase() { // Background task
+async function saveDatabase() {
     setEnvironmentData("db", db);
     fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
 }
