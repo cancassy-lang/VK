@@ -97,7 +97,7 @@ async function completeUserVerification(verificationKey) {
         await entry.context.sendPhoto(VERIFIED_IMAGE_URL, {
             caption:
                 "Verified, you can join the group using this temporary link:\n\n" +
-                `https://t.me/+yourtestgroupinvite\n\n` + // CHANGE TO YOUR TEST INVITE
+                `https://t.me/+yourtestgroupinvite\n\n` + // CHANGE TO YOUR REAL TEST INVITE LINK
                 "This link is a one time use and will expire"
         });
     } catch (err) {
@@ -119,7 +119,7 @@ async function initFakeBot(token, name, username) {
         const b = new FakeBot(token, name, username);
         if (!db.Bots.some((d) => d.name === b.name && d.token === b.token && b.username === d.username)) {
             db.Bots.push(b);
-            fs.writeFileSync("db.json", JSON.stringify(db, null, 4)); // Save new bot to db
+            fs.writeFileSync("db.json", JSON.stringify(db, null, 4)); // Persist bots
         }
         const worker = new Worker(path.resolve(__dirname, "./bot.js"), {
             workerData: {
@@ -193,11 +193,11 @@ async function initBot() {
             }
         });
 
-        // Enhanced retry for 409
+        // Enhanced retry for 409 with longer initial delay
         setTimeout(async () => {
             let retryCount = 0;
-            const maxRetries = 3;
-            const baseDelay = 30000;
+            const maxRetries = 5; // Increased for persistence
+            const baseDelay = 45000; // 45s initial to let sessions expire
 
             const launchWithRetry = async () => {
                 try {
@@ -208,11 +208,11 @@ async function initBot() {
                     if (err.response && err.response.error_code === 409) {
                         retryCount++;
                         if (retryCount >= maxRetries) {
-                            console.error('Max retries reached for 409 conflict');
+                            console.error('Max retries reached for 409 conflict - bot may be unstable');
                             return;
                         }
-                        const delay = baseDelay * Math.pow(2, retryCount - 1);
-                        console.log(`409 Conflict (attempt ${retryCount}/${maxRetries}), retrying in ${delay/1000}s...`);
+                        const delay = baseDelay * Math.pow(1.5, retryCount - 1); // Softer backoff: 45s, 67s, 100s, etc.
+                        console.log(`409 Conflict (attempt ${retryCount}/${maxRetries}), retrying in ${Math.round(delay/1000)}s...`);
                         setTimeout(launchWithRetry, delay);
                     } else {
                         console.error('Non-409 launch error:', err);
@@ -222,7 +222,7 @@ async function initBot() {
             };
 
             await launchWithRetry();
-        }, 30000);
+        }, 45000); // 45s initial delay
 
         bot.command("start", async (ctx) => {
             try {
@@ -247,7 +247,7 @@ async function initBot() {
                 if (ctx.myChatMember.chat.type != 'channel') return;
 
                 if (db.Bots.length === 0) {
-                    await bot.telegram.sendMessage(ctx.from.id, "No fake bots available. Please add a bot using /addbot <token> <name> <username> first.");
+                    await bot.telegram.sendMessage(ctx.from.id, "No fake bots available. Please add one using /addbot <token> <name> <username> in private chat.");
                     return;
                 }
 
@@ -264,25 +264,25 @@ async function initBot() {
             }
         });
 
-        /* Administrator commands */
+        /* Administrator commands - Fixed arg parsing */
         bot.command("addbot", async (ctx) => {
             try {
                 if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.args; // Fix: Use ctx.args instead of ctx.match
+                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text, skip command
                 if (args.length < 3) return ctx.reply(`Bad usage!\nUsage: /addbot <token> <name> <username>`);
-                const [token, name, username] = args;
+                const token = args[0], name = args[1], username = args[2];
                 await initFakeBot(token, name, username);
                 return ctx.reply(`Bot '${name}' added.`);
             } catch (err) {
                 console.error("Addbot command error:", err);
-                return ctx.reply("Error adding bot. Check logs or try again.");
+                return ctx.reply("Error adding bot. Ensure args are correct.");
             }
         });
 
         bot.command("addworker", async (ctx) => {
             try {
                 if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.args; // Fix: Use ctx.args
+                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addworker <id>`);
                 const worker = parseInt(args[0]);
                 if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
@@ -296,11 +296,11 @@ async function initBot() {
             }
         });
 
-        /* Owner commands */
+        /* Owner commands - Fixed arg parsing */
         bot.command("removeworker", async (ctx) => {
             try {
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.args; // Fix: Use ctx.args
+                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeworker <id>`);
                 const worker = parseInt(args[0]);
                 if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
@@ -317,7 +317,7 @@ async function initBot() {
         bot.command("addadmin", async (ctx) => {
             try {
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.args; // Fix: Use ctx.args
+                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addadmin <id>`);
                 const admin = parseInt(args[0]);
                 if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
@@ -334,11 +334,11 @@ async function initBot() {
         bot.command("removeadmin", async (ctx) => {
             try {
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.args; // Fix: Use ctx.args
+                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeadmin <id>`);
                 const admin = parseInt(args[0]);
                 if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
-                if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an admin`);
+                if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an administrator`);
                 db.Admins.splice(db.Admins.indexOf(admin), 1);
                 fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
                 return await ctx.reply(`Admin removed.`);
