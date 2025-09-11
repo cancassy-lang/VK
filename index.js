@@ -224,20 +224,36 @@ async function initBot() {
             }
         });
 
-        // Add 5s delay before launch to avoid conflicts
-        setTimeout(async () => {
-            try {
-                await bot.launch();
-                console.log('Main bot launched successfully');
-            } catch (err) {
-                if (err.response && err.response.error_code === 409) {
-                    console.log('Initial 409 Conflict, retrying in 10s...');
-                    setTimeout(() => bot.launch(), 10000);
-                } else {
-                    throw err;
+        // In initBot(), replace the setTimeout block with:
+setTimeout(async () => {
+    let retryCount = 0;
+    const maxRetries = 3;
+    const baseDelay = 30000; // 30s initial
+
+    const launchWithRetry = async () => {
+        try {
+            await bot.launch();
+            console.log('Main bot launched successfully');
+            return;
+        } catch (err) {
+            if (err.response && err.response.error_code === 409) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                    console.error('Max retries reached for 409 conflict');
+                    return;
                 }
+                const delay = baseDelay * Math.pow(2, retryCount - 1); // Exponential: 30s, 60s, 120s
+                console.log(`409 Conflict (attempt ${retryCount}), retrying in ${delay/1000}s...`);
+                setTimeout(launchWithRetry, delay);
+            } else {
+                console.error('Non-409 launch error:', err);
+                throw err;
             }
-        }, 5000);
+        }
+    };
+
+    await launchWithRetry();
+}, 30000); // 30s initial delay
 
         bot.command("start", async (ctx) => {
             try {
