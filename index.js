@@ -365,14 +365,14 @@ async function initBot() {
             }
         });
 
-        process.once('SIGINT', () => {
-            console.log('SIGINT received, stopping bot...');
-            bot.stop('SIGINT');
-        });
-        process.once('SIGTERM', () => {
-            console.log('SIGTERM received, stopping bot...');
-            bot.stop('SIGTERM');
-        });
+       process.once('SIGINT', () => {
+    console.log('SIGINT received, stopping bot...');
+    if (bot && bot.botInfo) bot.stop('SIGINT').catch(() => console.log('Bot already stopped'));
+});
+process.once('SIGTERM', () => {
+    console.log('SIGTERM received, stopping bot...');
+    if (bot && bot.botInfo) bot.stop('SIGTERM').catch(() => console.log('Bot already stopped'));
+});
 
         initWorker();
     } catch (error) {
@@ -402,3 +402,4 @@ async function initWorker() {
 
 initBot();
 setInterval(saveDatabase, 1000);
+
